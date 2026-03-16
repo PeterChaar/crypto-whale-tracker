@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Data files (contain user data)
+subscribers.json
+pending_payments.json
+processed_txs.json
+
+# Logs
+*.log
+
+# Node
+dashboard/node_modules/
+dashboard/dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
