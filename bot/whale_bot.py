@@ -362,6 +362,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("💰 Check Price", callback_data="cmd_price")],
         [InlineKeyboardButton("⛽ Gas Tracker", callback_data="cmd_gas"),
          InlineKeyboardButton("📈 My Stats", callback_data="cmd_stats")],
+        [InlineKeyboardButton("🌐 Open Dashboard", url="https://whaleradar.live/#dashboard")],
     ]
     if not user["is_pro"]:
         keyboard.append([InlineKeyboardButton("💎 Upgrade to PRO — $9.99/mo", callback_data="cmd_pro")])
