@@ -93,27 +93,32 @@ async def fetch_whale_transactions() -> list[dict]:
         except Exception as e:
             log.error(f"DexScreener error: {e}")
 
-        # Source 2: DexScreener — boosted tokens (trending)
+        # Source 2: DexScreener — top gainers with high volume
         try:
-            r = await client.get("https://api.dexscreener.com/token-boosts/latest/v1")
+            r = await client.get("https://api.dexscreener.com/latest/dex/search?q=SOL%20USDT")
             if r.status_code == 200:
-                boosts = r.json() if isinstance(r.json(), list) else r.json().get("tokens", [])
-                for b in boosts[:10]:
-                    token_addr = b.get("tokenAddress", "")[:10]
-                    if token_addr and token_addr not in sent_alerts:
-                        whales.append({
-                            "id": token_addr,
-                            "type": "buy",
-                            "token": b.get("symbol", b.get("description", "???")[:8]),
-                            "amount_usd": b.get("amount", 100000),
-                            "chain": b.get("chainId", "unknown"),
-                            "change_24h": 0,
-                            "url": b.get("url", f"https://dexscreener.com"),
-                            "is_mega": False,
-                        })
+                pairs = r.json().get("pairs", [])
+                for p in pairs:
+                    vol = p.get("volume", {}).get("h24", 0) or 0
+                    if vol >= WHALE_THRESHOLD:
+                        pair_id = p.get("pairAddress", "")[:10]
+                        if pair_id not in sent_alerts:
+                            change = p.get("priceChange", {}).get("h24", 0) or 0
+                            whales.append({
+                                "id": pair_id,
+                                "type": "buy" if change > 0 else "sell",
+                                "token": p.get("baseToken", {}).get("symbol", "???"),
+                                "amount_usd": vol,
+                                "chain": p.get("chainId", "solana"),
+                                "change_24h": change,
+                                "url": p.get("url", "https://dexscreener.com"),
+                                "is_mega": vol >= MEGA_WHALE_THRESHOLD,
+                            })
         except Exception as e:
-            log.error(f"DexScreener boosts error: {e}")
+            log.error(f"DexScreener source 2 error: {e}")
 
+    # Strict filter: nothing under $100K
+    whales = [w for w in whales if w["amount_usd"] >= WHALE_THRESHOLD]
     # Sort by volume descending, take top alerts
     whales.sort(key=lambda w: w["amount_usd"], reverse=True)
     return whales[:8]
