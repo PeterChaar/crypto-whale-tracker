@@ -10,6 +10,7 @@ import sys
 import json
 import logging
 import asyncio
+import secrets
 from datetime import datetime, timedelta
 
 import httpx
@@ -41,6 +42,10 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
+def generate_auth_token():
+    return secrets.token_urlsafe(32)
+
+
 def sync_to_supabase(chat_id: int, is_pro: bool, username: str = "", upgraded_at=None, pro_expires=None):
     """Sync subscriber status to Supabase so the website can check it."""
     try:
@@ -53,10 +58,15 @@ def sync_to_supabase(chat_id: int, is_pro: bool, username: str = "", upgraded_at
             row["upgraded_at"] = upgraded_at
         if pro_expires:
             row["pro_expires"] = pro_expires
+        if is_pro:
+            # Generate auth token for website login
+            row["auth_token"] = generate_auth_token()
         sb.table("subscribers").upsert(row, on_conflict="chat_id").execute()
         log.info(f"Supabase sync: {chat_id} is_pro={is_pro}")
+        return row.get("auth_token")
     except Exception as e:
         log.error(f"Supabase sync error: {e}")
+        return None
 
 
 # ── Subscriber Management ────────────────────────────────────────────────────
@@ -356,13 +366,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     plan = "💎 PRO" if user["is_pro"] else "🆓 Free"
+
+    # Get dashboard link (with auth token for Pro users)
+    dash_url = "https://whaleradar.live/#dashboard"
+    if user["is_pro"]:
+        try:
+            result = sb.table("subscribers").select("auth_token").eq("chat_id", update.effective_chat.id).single().execute()
+            token = result.data.get("auth_token") if result.data else None
+            if not token:
+                token = generate_auth_token()
+                sb.table("subscribers").update({"auth_token": token}).eq("chat_id", update.effective_chat.id).execute()
+            dash_url = f"https://whaleradar.live/?token={token}#dashboard"
+        except Exception:
+            pass
+
     keyboard = [
         [InlineKeyboardButton("🐋 Whale Alerts", callback_data="cmd_whales")],
         [InlineKeyboardButton("📊 Top Movers", callback_data="cmd_top"),
          InlineKeyboardButton("💰 Check Price", callback_data="cmd_price")],
         [InlineKeyboardButton("⛽ Gas Tracker", callback_data="cmd_gas"),
          InlineKeyboardButton("📈 My Stats", callback_data="cmd_stats")],
-        [InlineKeyboardButton("🌐 Open Dashboard", url="https://whaleradar.live/#dashboard")],
+        [InlineKeyboardButton("🌐 Open Dashboard", url=dash_url)],
     ]
     if not user["is_pro"]:
         keyboard.append([InlineKeyboardButton("💎 Upgrade to PRO — $9.99/mo", callback_data="cmd_pro")])

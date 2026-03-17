@@ -5,20 +5,20 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-export async function checkProStatus(chatId) {
+export async function checkProByToken(token) {
   const { data, error } = await supabase
     .from('subscribers')
-    .select('is_pro, pro_expires')
-    .eq('chat_id', chatId)
+    .select('chat_id, username, is_pro, pro_expires')
+    .eq('auth_token', token)
     .single()
 
-  if (error || !data) return false
+  if (error || !data) return null
 
   // Check if expired
   if (data.is_pro && data.pro_expires) {
     const expires = new Date(data.pro_expires)
-    if (new Date() > expires) return false
+    if (new Date() > expires) return { ...data, is_pro: false }
   }
 
-  return data.is_pro
+  return data
 }

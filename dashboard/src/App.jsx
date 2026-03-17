@@ -1,9 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { LaserHero } from './components/ui/laser-focus-crypto-hero-section'
 import WhaleLogo from './components/ui/WhaleLogo'
-import TelegramLogin from './components/TelegramLogin'
-import { checkProStatus } from './lib/supabase'
+import { checkProByToken } from './lib/supabase'
 
 /* ── API Cache to avoid rate limits ──────────────────────────────────── */
 const apiCache = {}
@@ -296,7 +295,7 @@ function pctFmt(v) { return v != null ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` :
    FREE USER GATE — Blurred dashboard preview
    ────────────────────────────────────────────────────────────────────────── */
 
-function GatedDashboard({ isPro, tgUser, onTelegramAuth }) {
+function GatedDashboard({ isPro, username }) {
   if (isPro) return <ProDashboard />
 
   return (
@@ -309,26 +308,19 @@ function GatedDashboard({ isPro, tgUser, onTelegramAuth }) {
           <span className="gated-icon">&#128274;</span>
           <h2>Pro Dashboard</h2>
           <p>Live charts, whale alerts, and advanced analytics.</p>
-          {tgUser ? (
-            <>
-              <p className="gated-sub">Hi {tgUser.first_name}! You're on the Free plan.</p>
-              <div className="gated-btns">
-                <a href="https://t.me/Whaleradarbot_bot?start=upgrade" target="_blank" className="btn btn-primary btn-lg">
-                  Upgrade to Pro — $9.99/mo
-                </a>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="gated-sub">Log in with Telegram to access the dashboard.</p>
-              <div className="gated-btns">
-                <TelegramLogin onAuth={onTelegramAuth} />
-                <a href="https://t.me/Whaleradarbot_bot?start=upgrade" target="_blank" className="btn btn-outline btn-lg" style={{ marginTop: '8px' }}>
-                  Get Pro on Telegram
-                </a>
-              </div>
-            </>
-          )}
+          <p className="gated-sub">
+            {username
+              ? `Hi ${username}! Upgrade to Pro to unlock the dashboard.`
+              : 'Subscribe to Pro on Telegram to unlock the full dashboard.'}
+          </p>
+          <div className="gated-btns">
+            <a href="https://t.me/Whaleradarbot_bot?start=upgrade" target="_blank" className="btn btn-primary btn-lg">
+              Upgrade to Pro — $9.99/mo
+            </a>
+            <a href="https://t.me/Whaleradarbot_bot" target="_blank" className="btn btn-outline btn-lg">
+              Open Bot on Telegram
+            </a>
+          </div>
         </div>
       </div>
     </section>
@@ -509,37 +501,48 @@ function Footer() {
 
 function App() {
   const [isPro, setIsPro] = useState(false)
-  const [tgUser, setTgUser] = useState(null)
+  const [username, setUsername] = useState('')
 
-  const handleTelegramAuth = useCallback(async (user) => {
-    setTgUser(user)
-    // Check Pro status in Supabase
-    const pro = await checkProStatus(user.id)
-    setIsPro(pro)
-  }, [])
-
-  // Check for saved login on mount
+  // Check for auth token in URL or localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('tg_user')
-    if (saved) {
-      try {
-        const user = JSON.parse(saved)
-        setTgUser(user)
-        checkProStatus(user.id).then(setIsPro)
-      } catch { /* ignore */ }
+    async function authenticate() {
+      // Check URL for token (from bot link)
+      const params = new URLSearchParams(window.location.search)
+      let token = params.get('token')
+
+      if (token) {
+        // Save token and clean URL
+        localStorage.setItem('wr_token', token)
+        window.history.replaceState({}, '', window.location.pathname + window.location.hash)
+      } else {
+        // Check saved token
+        token = localStorage.getItem('wr_token')
+      }
+
+      if (!token) return
+
+      const user = await checkProByToken(token)
+      if (user) {
+        setIsPro(user.is_pro)
+        setUsername(user.username || '')
+      } else {
+        // Invalid token, clear it
+        localStorage.removeItem('wr_token')
+      }
     }
+    authenticate()
   }, [])
 
   return (
     <div className="bg-black">
-      <LaserHero isPro={isPro} setIsPro={setIsPro} tgUser={tgUser} />
+      <LaserHero isPro={isPro} setIsPro={setIsPro} />
       <LiveTicker />
-      <Features />
-      <HowItWorks />
-      {!isPro && <Pricing />}
       <div id="dashboard">
-        <GatedDashboard isPro={isPro} tgUser={tgUser} onTelegramAuth={handleTelegramAuth} />
+        <GatedDashboard isPro={isPro} username={username} />
       </div>
+      <HowItWorks />
+      <Features />
+      {!isPro && <Pricing />}
       <Footer />
     </div>
   )
