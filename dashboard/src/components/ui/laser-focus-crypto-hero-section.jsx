@@ -559,7 +559,7 @@ function LaserFlow({
   return <div ref={mountRef} className={`w-full h-full relative ${className || ""}`} style={style} />
 }
 
-export function LaserHero({ isPro, setIsPro }) {
+export function LaserHero({ isPro, setIsPro, tgUser }) {
   const [menuOpen, setMenuOpen] = useState(false)
   return (
     <section className="relative flex flex-col overflow-hidden bg-black w-full min-h-[calc(100svh-44px)] md:min-h-0 md:h-[calc(100vh-52px)]">

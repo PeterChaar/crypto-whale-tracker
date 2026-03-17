@@ -13,6 +13,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 import httpx
+from supabase import create_client
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -33,6 +34,30 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+
+# ── Supabase ─────────────────────────────────────────────────────────────────
+SUPABASE_URL = "https://zeyqrpfwcvhtzpwjvpfg.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpleXFycGZ3Y3ZodHpwd2p2cGZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyNzUyNTYsImV4cCI6MjA4NTg1MTI1Nn0.BNBhmZMbxgLP8uKfW86ZY5gv_2ZBPXAZQITVAv_NqDg"
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def sync_to_supabase(chat_id: int, is_pro: bool, username: str = "", upgraded_at=None, pro_expires=None):
+    """Sync subscriber status to Supabase so the website can check it."""
+    try:
+        row = {
+            "chat_id": chat_id,
+            "is_pro": is_pro,
+            "username": username,
+        }
+        if upgraded_at:
+            row["upgraded_at"] = upgraded_at
+        if pro_expires:
+            row["pro_expires"] = pro_expires
+        sb.table("subscribers").upsert(row, on_conflict="chat_id").execute()
+        log.info(f"Supabase sync: {chat_id} is_pro={is_pro}")
+    except Exception as e:
+        log.error(f"Supabase sync error: {e}")
+
 
 # ── Subscriber Management ────────────────────────────────────────────────────
 SUBSCRIBERS_FILE = os.path.join(os.path.dirname(__file__), "..", "subscribers.json")
@@ -92,6 +117,7 @@ def get_user(chat_id: int) -> dict:
                 subs[key] = user
                 save_subs(subs)
                 log.info(f"User {chat_id} Pro expired, downgraded to free")
+                sync_to_supabase(chat_id, False, user.get("username", ""))
         except (ValueError, TypeError):
             pass
     return user
@@ -130,6 +156,7 @@ def set_pro(chat_id: int, username: str = ""):
     }
     save_subs(subs)
     log.info(f"User {chat_id} ({username}) upgraded to PRO — expires {expires.date()}")
+    sync_to_supabase(chat_id, True, username, now.isoformat(), expires.isoformat())
 
 
 # ── Pending Payments (FIFO queue) ─────────────────────────────────────────────
