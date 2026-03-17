@@ -1,0 +1,47 @@
+export default function WhaleLogo({ size = 32, className = "" }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="60 30 430 380"
+      width={size}
+      height={size}
+      className={className}
+      style={{ display: "inline-block", verticalAlign: "middle" }}
+    >
+      {/* Water spout */}
+      <path d="M200 120 Q195 95 205 70 Q210 55 200 40" stroke="#00ff88" strokeWidth="6" fill="none" strokeLinecap="round" opacity="0.6"/>
+      <path d="M215 115 Q215 85 225 60 Q228 50 222 35" stroke="#00ff88" strokeWidth="5" fill="none" strokeLinecap="round" opacity="0.4"/>
+      <path d="M185 125 Q178 100 188 75" stroke="#00ff88" strokeWidth="4" fill="none" strokeLinecap="round" opacity="0.3"/>
+      {/* Main whale body */}
+      <path d="M95 280 Q95 200 160 160 Q200 140 260 140 Q340 140 390 180 Q430 210 430 260 Q430 310 390 340 Q350 365 300 375 Q250 385 200 380 Q140 370 110 330 Q95 310 95 280Z" fill="url(#wlg)"/>
+      {/* Belly */}
+      <path d="M130 290 Q140 330 180 350 Q220 365 270 368 Q310 370 340 355 Q370 340 385 310 Q370 340 330 358 Q290 380 240 378 Q180 375 145 340 Q125 320 130 290Z" fill="rgba(255,255,255,0.08)"/>
+      {/* Eye */}
+      <circle cx="195" cy="220" r="14" fill="#000"/>
+      <circle cx="199" cy="216" r="5" fill="#fff"/>
+      {/* Mouth */}
+      <path d="M145 265 Q175 275 210 270" stroke="#000" strokeWidth="3" fill="none" strokeLinecap="round" opacity="0.4"/>
+      {/* Dorsal fin */}
+      <path d="M280 145 Q290 100 310 85 Q325 75 330 90 Q335 110 320 145Z" fill="url(#wlfg)"/>
+      {/* Pectoral fin */}
+      <path d="M200 300 Q180 340 160 370 Q150 385 165 380 Q190 370 220 335 Q230 320 215 305Z" fill="url(#wlfg)" opacity="0.85"/>
+      {/* Tail */}
+      <path d="M400 250 Q430 230 460 195 Q475 175 480 185 Q485 200 465 230 Q450 250 440 260 Q450 270 465 295 Q480 320 475 330 Q470 340 455 325 Q430 295 400 275Z" fill="url(#wltg)"/>
+      <defs>
+        <linearGradient id="wlg" x1="95" y1="140" x2="430" y2="380" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#8ec5d6"/>
+          <stop offset="50%" stopColor="#6ba8bf"/>
+          <stop offset="100%" stopColor="#4a8ea8"/>
+        </linearGradient>
+        <linearGradient id="wlfg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#7bb8cc"/>
+          <stop offset="100%" stopColor="#5a9ab2"/>
+        </linearGradient>
+        <linearGradient id="wltg" x1="400" y1="195" x2="480" y2="330" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#7bb8cc"/>
+          <stop offset="100%" stopColor="#5a9ab2"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  )
+}

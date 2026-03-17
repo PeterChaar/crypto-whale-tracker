@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import * as THREE from "three"
-import { ArrowRight } from "lucide-react"
+import { ArrowRight, Menu, X } from "lucide-react"
+import WhaleLogo from "./WhaleLogo"
 
 const VERT = `
 precision highp float;
@@ -559,16 +560,17 @@ function LaserFlow({
 }
 
 export function LaserHero({ isPro, setIsPro }) {
+  const [menuOpen, setMenuOpen] = useState(false)
   return (
-    <section className="relative flex flex-col overflow-hidden bg-black w-full" style={{ height: 'calc(100vh - 52px)' }}>
+    <section className="relative flex flex-col overflow-hidden bg-black w-full min-h-[calc(100svh-44px)] md:min-h-0 md:h-[calc(100vh-52px)]">
       {/* Navbar */}
-      <nav className="relative z-20 w-full">
+      <nav className="relative z-20 w-full flex-shrink-0">
         <div className="absolute inset-0 bg-black/40 backdrop-blur-md border-b border-white/5"></div>
-        <div className="relative xl:max-w-7xl max-w-6xl mx-auto py-4 lg:px-0 px-6">
+        <div className="relative xl:max-w-7xl max-w-6xl mx-auto py-3 md:py-4 lg:px-0 px-4 sm:px-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="text-2xl">&#128011;</span>
-              <span className="text-xl font-bold text-white tracking-tight">WhaleRadar</span>
+              <WhaleLogo size={28} className="sm:w-8 sm:h-8" />
+              <span className="text-base sm:text-lg md:text-xl font-bold text-white tracking-tight">WhaleRadar</span>
             </div>
 
             <div className="hidden md:flex items-center gap-8">
@@ -581,24 +583,35 @@ export function LaserHero({ isPro, setIsPro }) {
               <a href="#dashboard" className="text-gray-400 hover:text-white transition-colors text-sm">
                 Dashboard
               </a>
-              <button
-                className="text-xs px-3 py-1.5 bg-white/5 text-gray-300 border border-white/10 font-medium transition-colors hover:bg-white/10"
-                onClick={() => setIsPro(p => !p)}
-              >
-                {isPro ? 'PRO \u2713' : 'Demo PRO'}
-              </button>
             </div>
 
-            <a
-              href="https://t.me/Whaleradarbot_bot"
-              target="_blank"
-              rel="noopener"
-              className="bg-white text-black hover:bg-gray-200 px-5 py-2 text-sm font-medium transition-colors duration-200 flex items-center gap-2"
-            >
-              Open Bot
-              <ArrowRight className="w-3.5 h-3.5" />
-            </a>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <a
+                href="https://t.me/Whaleradarbot_bot"
+                target="_blank"
+                rel="noopener"
+                className="bg-white text-black hover:bg-gray-200 px-3 sm:px-4 md:px-5 py-2 text-xs md:text-sm font-medium transition-colors duration-200 flex items-center gap-1.5 sm:gap-2 min-h-[44px]"
+              >
+                Open Bot
+                <ArrowRight className="w-3.5 h-3.5" />
+              </a>
+              <button
+                className="md:hidden text-white p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                onClick={() => setMenuOpen(o => !o)}
+              >
+                {menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
+
+          {/* Mobile menu */}
+          {menuOpen && (
+            <div className="md:hidden mt-3 pb-3 border-t border-white/10 pt-3 flex flex-col gap-1">
+              <a href="#features" onClick={() => setMenuOpen(false)} className="text-gray-400 hover:text-white text-sm py-2.5 px-1">Features</a>
+              <a href="#pricing" onClick={() => setMenuOpen(false)} className="text-gray-400 hover:text-white text-sm py-2.5 px-1">Pricing</a>
+              <a href="#dashboard" onClick={() => setMenuOpen(false)} className="text-gray-400 hover:text-white text-sm py-2.5 px-1">Dashboard</a>
+            </div>
+          )}
         </div>
       </nav>
 
@@ -626,26 +639,26 @@ export function LaserHero({ isPro, setIsPro }) {
       </div>
 
       {/* Hero Content */}
-      <div className="relative z-10 flex-1 flex flex-col justify-center pt-20 pb-20">
-        <div className="xl:max-w-7xl max-w-6xl w-full mx-auto lg:px-0 px-6">
-          <p className="text-sm text-gray-500 uppercase tracking-widest mb-6">Whale Intelligence Platform</p>
+      <div className="relative z-10 flex-1 flex flex-col justify-center py-4 sm:py-8 md:pt-20 md:pb-20">
+        <div className="xl:max-w-7xl max-w-6xl w-full mx-auto lg:px-0 px-5 sm:px-6">
+          <p className="text-[10px] sm:text-xs md:text-sm text-gray-500 uppercase tracking-widest mb-2 sm:mb-3 md:mb-6">Whale Intelligence Platform</p>
 
-          <h1 className="text-5xl md:text-7xl font-bold mb-6 text-white leading-tight tracking-tight">
+          <h1 className="text-[26px] leading-[1.15] sm:text-4xl md:text-5xl lg:text-7xl font-bold mb-2.5 sm:mb-4 md:mb-6 text-white tracking-tight">
             Track whale movements.
             <br />
             <span className="text-gray-500">Stay ahead of the market.</span>
           </h1>
 
-          <p className="text-lg text-gray-400 mb-12 max-w-xl leading-relaxed">
+          <p className="text-[13px] sm:text-base md:text-lg text-gray-400 mb-5 sm:mb-8 md:mb-12 max-w-xl leading-relaxed">
             Real-time alerts when whales move big money. Know what smart money is buying before everyone else does.
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-4 mb-20">
+          <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-4 mb-6 sm:mb-10 md:mb-20">
             <a
               href="https://t.me/Whaleradarbot_bot"
               target="_blank"
               rel="noopener"
-              className="bg-white text-black hover:bg-gray-200 px-8 py-3.5 text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2"
+              className="bg-white text-black hover:bg-gray-200 px-6 sm:px-8 py-3 sm:py-3.5 text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 min-h-[48px]"
             >
               Start tracking — it's free
               <ArrowRight className="w-4 h-4" />
@@ -653,34 +666,34 @@ export function LaserHero({ isPro, setIsPro }) {
 
             <a
               href="#pricing"
-              className="border border-white/15 bg-transparent hover:bg-white/5 text-gray-300 px-8 py-3.5 text-sm font-medium transition-all duration-200 text-center"
+              className="border border-white/15 bg-transparent hover:bg-white/5 text-gray-300 px-6 sm:px-8 py-3 sm:py-3.5 text-sm font-medium transition-all duration-200 text-center min-h-[48px] flex items-center justify-center"
             >
               View pricing
             </a>
           </div>
 
           {/* Stats */}
-          <div className="flex flex-wrap items-center gap-10 md:gap-16">
+          <div className="grid grid-cols-3 gap-3 sm:flex sm:flex-wrap sm:items-center sm:gap-10 md:gap-16">
             <div>
-              <span className="block text-2xl font-bold text-white font-mono">$2.4B+</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Volume tracked daily</span>
+              <span className="block text-base sm:text-xl md:text-2xl font-bold text-white font-mono">$2.4B+</span>
+              <span className="text-[9px] sm:text-[10px] md:text-xs text-gray-500 uppercase tracking-wider leading-tight">Volume tracked</span>
             </div>
-            <div className="w-px h-8 bg-white/10 hidden md:block" />
+            <div className="w-px h-8 bg-white/10 hidden sm:block" />
             <div>
-              <span className="block text-2xl font-bold text-white font-mono">10K+</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Wallets monitored</span>
+              <span className="block text-base sm:text-xl md:text-2xl font-bold text-white font-mono">10K+</span>
+              <span className="text-[9px] sm:text-[10px] md:text-xs text-gray-500 uppercase tracking-wider leading-tight">Wallets monitored</span>
             </div>
-            <div className="w-px h-8 bg-white/10 hidden md:block" />
+            <div className="w-px h-8 bg-white/10 hidden sm:block" />
             <div>
-              <span className="block text-2xl font-bold text-white font-mono">&lt;5s</span>
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Alert latency</span>
+              <span className="block text-base sm:text-xl md:text-2xl font-bold text-white font-mono">&lt;5s</span>
+              <span className="text-[9px] sm:text-[10px] md:text-xs text-gray-500 uppercase tracking-wider leading-tight">Alert latency</span>
             </div>
           </div>
         </div>
       </div>
 
       {/* Subtle bottom fade */}
-      <div className="absolute bottom-0 left-0 right-0 h-40 z-[1] bg-gradient-to-t from-black to-transparent pointer-events-none" />
+      <div className="absolute bottom-0 left-0 right-0 h-20 sm:h-40 z-[1] bg-gradient-to-t from-black to-transparent pointer-events-none" />
     </section>
   )
 }

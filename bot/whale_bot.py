@@ -10,7 +10,6 @@ import sys
 import json
 import logging
 import asyncio
-import random
 from datetime import datetime, timedelta
 
 import httpx
@@ -47,7 +46,7 @@ USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{WALLET_ADDRESS}/transactions/trc20"
 PENDING_FILE = os.path.join(os.path.dirname(__file__), "..", "pending_payments.json")
 PROCESSED_FILE = os.path.join(os.path.dirname(__file__), "..", "processed_txs.json")
-PRO_PRICE_BASE = 9.99
+PRO_PRICE = 9.99
 
 
 def load_subs() -> dict:
@@ -77,6 +76,13 @@ def get_user(chat_id: int) -> dict:
         user["last_reset"] = today
         subs[key] = user
         save_subs(subs)
+    # Admin is always Pro
+    if chat_id == ADMIN_CHAT_ID:
+        if not user.get("is_pro"):
+            user["is_pro"] = True
+            subs[key] = user
+            save_subs(subs)
+        return user
     # Check if Pro subscription expired
     if user.get("is_pro") and user.get("pro_expires"):
         try:
@@ -126,54 +132,43 @@ def set_pro(chat_id: int, username: str = ""):
     log.info(f"User {chat_id} ({username}) upgraded to PRO — expires {expires.date()}")
 
 
-# ── Pending Payments (unique amount matching) ────────────────────────────────
+# ── Pending Payments (FIFO queue) ─────────────────────────────────────────────
 
-def load_pending() -> dict:
+def load_pending() -> list:
     try:
         with open(PENDING_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+            # Migrate old dict format to list
+            if isinstance(data, dict):
+                return []
+            return data
     except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+        return []
 
 
-def save_pending(pending: dict):
+def save_pending(pending: list):
     with open(PENDING_FILE, "w") as f:
         json.dump(pending, f, indent=2, default=str)
 
 
-def generate_unique_amount(chat_id: int) -> str:
-    """Generate a unique USDT amount so blockchain transfers can be matched."""
+def add_pending_payment(chat_id: int, username: str = ""):
     pending = load_pending()
-    # If this user already has a pending payment, reuse that amount
-    for amount, info in pending.items():
-        if info["chat_id"] == chat_id:
-            return amount
-    # New unique amount: $10.01 – $10.99
-    existing = set(pending.keys())
-    for _ in range(200):
-        extra = random.randint(1, 99)
-        amount = f"{PRO_PRICE_BASE + extra / 100:.2f}"
-        if amount not in existing:
-            return amount
-    # Fallback with 3-decimal precision
-    return f"{PRO_PRICE_BASE + random.randint(100, 999) / 1000:.3f}"
-
-
-def add_pending_payment(chat_id: int, amount: str, username: str = ""):
-    pending = load_pending()
-    pending[amount] = {
+    # Don't add duplicate — if user already pending, skip
+    for p in pending:
+        if p["chat_id"] == chat_id:
+            return
+    pending.append({
         "chat_id": chat_id,
         "username": username,
         "created_at": datetime.utcnow().isoformat(),
-    }
+    })
     save_pending(pending)
 
 
-def remove_pending_payment(amount: str):
+def remove_pending_payment(chat_id: int):
     pending = load_pending()
-    if amount in pending:
-        del pending[amount]
-        save_pending(pending)
+    pending = [p for p in pending if p["chat_id"] != chat_id]
+    save_pending(pending)
 
 
 def load_processed_txs() -> set:
@@ -197,22 +192,20 @@ def save_processed_tx(tx_id: str):
 # ── Blockchain Payment Monitor ───────────────────────────────────────────────
 
 async def check_incoming_payments(bot):
-    """Poll TronGrid for new USDT transfers and auto-upgrade matching users."""
+    """Poll TronGrid for new USDT transfers and auto-upgrade oldest pending user."""
     pending = load_pending()
     if not pending:
         return
 
-    # Clean expired pending payments (older than 24h)
+    # Clean expired pending payments (older than 48h)
     now = datetime.utcnow()
-    expired = [
-        amt for amt, info in pending.items()
-        if (now - datetime.fromisoformat(info["created_at"])).total_seconds() > 86400
+    cleaned = [
+        p for p in pending
+        if (now - datetime.fromisoformat(p["created_at"])).total_seconds() < 172800
     ]
-    if expired:
-        for amt in expired:
-            del pending[amt]
-        save_pending(pending)
-        pending = load_pending()
+    if len(cleaned) != len(pending):
+        save_pending(cleaned)
+        pending = cleaned
     if not pending:
         return
 
@@ -248,28 +241,24 @@ async def check_incoming_payments(bot):
 
         raw_value = int(tx.get("value", "0"))
         amount_usdt = raw_value / 1_000_000
-        amount_str = f"{amount_usdt:.2f}"
 
-        # Match against pending payments (try 2-decimal then 3-decimal)
-        matched_key = None
-        if amount_str in pending:
-            matched_key = amount_str
-        else:
-            amount_str_3 = f"{amount_usdt:.3f}"
-            if amount_str_3 in pending:
-                matched_key = amount_str_3
-
-        if not matched_key:
+        # Accept any payment between $9.50 and $10.50 as valid $9.99 payment
+        if amount_usdt < 9.50 or amount_usdt > 10.50:
             continue
 
-        info = pending[matched_key]
+        # FIFO: upgrade the oldest pending user
+        pending = load_pending()
+        if not pending:
+            continue
+
+        info = pending[0]  # oldest
         chat_id = info["chat_id"]
         username = info.get("username", "")
 
         # Auto-upgrade
         set_pro(chat_id, username)
         save_processed_tx(tx_id)
-        remove_pending_payment(matched_key)
+        remove_pending_payment(chat_id)
 
         # Notify user
         try:
@@ -277,7 +266,7 @@ async def check_incoming_payments(bot):
                 chat_id=chat_id,
                 text=(
                     "🎉 *Payment Confirmed — Welcome to WhaleRadar PRO!*\n\n"
-                    f"✅ Received *${matched_key} USDT*\n"
+                    f"✅ Received *${amount_usdt:.2f} USDT*\n"
                     "Your account is now PRO for *30 days*.\n\n"
                     "✅ Auto whale alerts — ON\n"
                     "✅ Full token details — ON\n"
@@ -295,17 +284,18 @@ async def check_incoming_payments(bot):
             await bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
                 text=(
-                    f"✅ *Auto-Upgrade*\n\n"
+                    f"💰 *New Payment Received!*\n\n"
                     f"User: @{username} (`{chat_id}`)\n"
-                    f"Amount: ${matched_key} USDT\n"
-                    f"TX: `{tx_id[:20]}...`"
+                    f"Amount: ${amount_usdt:.2f} USDT\n"
+                    f"TX: `{tx_id[:20]}...`\n"
+                    f"Status: ✅ Auto-upgraded to PRO"
                 ),
                 parse_mode="Markdown",
             )
         except Exception as e:
             log.error(f"Couldn't notify admin: {e}")
 
-        log.info(f"✅ AUTO-UPGRADE: {chat_id} paid ${matched_key}, tx={tx_id[:16]}")
+        log.info(f"✅ AUTO-UPGRADE: {chat_id} paid ${amount_usdt:.2f}, tx={tx_id[:16]}")
 
 
 async def payment_monitor_loop(bot):
@@ -608,17 +598,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "pay_usdt":
         chat_id = query.from_user.id
         username = query.from_user.username or query.from_user.first_name or ""
-        amount = generate_unique_amount(chat_id)
-        add_pending_payment(chat_id, amount, username)
+        add_pending_payment(chat_id, username)
         await query.message.reply_text(
             "💰 *Direct USDT Transfer*\n\n"
-            f"Send exactly *${amount} USDT* to:\n"
+            "Send *$9.99 USDT* to this wallet:\n\n"
             f"`{WALLET_ADDRESS}`\n\n"
+            "📋 _Tap the address to copy_\n\n"
             "⚠️ *TRC20 (Tron) network ONLY!*\n\n"
-            f"⚡ *Your unique amount: ${amount}*\n"
-            "This exact amount identifies your payment.\n"
-            "Your upgrade will be *automatic* within 1-2 minutes!\n\n"
-            "⚠️ Sending on wrong network = lost funds.",
+            "Your upgrade will be *automatic* within 1-2 minutes "
+            "after the transaction confirms on the blockchain.\n\n"
+            "⚠️ Sending on the wrong network = lost funds.",
             parse_mode="Markdown",
         )
 

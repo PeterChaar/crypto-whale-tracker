@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { LaserHero } from './components/ui/laser-focus-crypto-hero-section'
+import WhaleLogo from './components/ui/WhaleLogo'
 
 /* ── API Cache to avoid rate limits ──────────────────────────────────── */
 const apiCache = {}
@@ -468,7 +469,7 @@ function Footer() {
     <footer className="footer">
       <div className="footer-inner">
         <div className="footer-brand">
-          <div className="logo"><span className="logo-icon">&#128011;</span><span className="logo-text">WhaleRadar</span></div>
+          <div className="logo" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><WhaleLogo size={24} /><span className="logo-text">WhaleRadar</span></div>
           <p>Track whales. Follow smart money. Stay ahead.</p>
         </div>
         <div className="footer-links">

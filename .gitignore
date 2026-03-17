@@ -19,5 +19,8 @@ __pycache__/
 .venv/
 venv/
 
+# Netlify
+dashboard/.netlify/
+
 # OS
 .DS_Store

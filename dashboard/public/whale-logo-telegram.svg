@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#000000"/>
+  <!-- Water spout -->
+  <path d="M185 135 Q180 110 190 85 Q195 70 185 55" stroke="#00ff88" stroke-width="7" fill="none" stroke-linecap="round" opacity="0.6"/>
+  <path d="M200 130 Q200 100 210 75 Q213 65 207 50" stroke="#00ff88" stroke-width="5.5" fill="none" stroke-linecap="round" opacity="0.4"/>
+  <path d="M170 140 Q163 115 173 90" stroke="#00ff88" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.3"/>
+  <!-- Main whale body -->
+  <path d="M80 295
+    Q80 215 145 175
+    Q185 155 245 155
+    Q325 155 375 195
+    Q415 225 415 275
+    Q415 325 375 355
+    Q335 380 285 390
+    Q235 400 185 395
+    Q125 385 95 345
+    Q80 325 80 295Z"
+    fill="url(#wg)"/>
+  <!-- Belly -->
+  <path d="M115 305
+    Q125 345 165 365
+    Q205 380 255 383
+    Q295 385 325 370
+    Q355 355 370 325
+    Q355 355 315 373
+    Q275 395 225 393
+    Q165 390 130 355
+    Q110 335 115 305Z"
+    fill="rgba(255,255,255,0.08)"/>
+  <!-- Eye -->
+  <circle cx="180" cy="235" r="15" fill="#000"/>
+  <circle cx="184" cy="231" r="5.5" fill="#fff"/>
+  <!-- Mouth -->
+  <path d="M130 280 Q160 290 195 285" stroke="#000" stroke-width="3.5" fill="none" stroke-linecap="round" opacity="0.4"/>
+  <!-- Dorsal fin -->
+  <path d="M265 160 Q275 115 295 100 Q310 90 315 105 Q320 125 305 160Z" fill="url(#fg)"/>
+  <!-- Pectoral fin -->
+  <path d="M185 315 Q165 355 145 385 Q135 400 150 395 Q175 385 205 350 Q215 335 200 320Z" fill="url(#fg)" opacity="0.85"/>
+  <!-- Tail -->
+  <path d="M385 265
+    Q415 245 445 210
+    Q460 190 465 200
+    Q470 215 450 245
+    Q435 265 425 275
+    Q435 285 450 310
+    Q465 335 460 345
+    Q455 355 440 340
+    Q415 310 385 290Z"
+    fill="url(#tg)"/>
+  <!-- WhaleRadar text -->
+  <text x="256" y="470" text-anchor="middle" font-family="Inter, system-ui, -apple-system, sans-serif" font-weight="700" font-size="52" fill="#ffffff" letter-spacing="-1">WhaleRadar</text>
+  <defs>
+    <linearGradient id="wg" x1="80" y1="155" x2="415" y2="395" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8ec5d6"/>
+      <stop offset="50%" stop-color="#6ba8bf"/>
+      <stop offset="100%" stop-color="#4a8ea8"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7bb8cc"/>
+      <stop offset="100%" stop-color="#5a9ab2"/>
+    </linearGradient>
+    <linearGradient id="tg" x1="385" y1="210" x2="465" y2="345" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7bb8cc"/>
+      <stop offset="100%" stop-color="#5a9ab2"/>
+    </linearGradient>
+  </defs>
+</svg>
