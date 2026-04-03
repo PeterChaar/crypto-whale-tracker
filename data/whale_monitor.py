@@ -29,7 +29,7 @@ WHALE_THRESHOLD = 500_000  # $500K+ = whale
 MEGA_WHALE_THRESHOLD = 5_000_000  # $5M+ = mega whale
 
 # Check interval in seconds
-CHECK_INTERVAL = 120  # every 2 minutes
+CHECK_INTERVAL = 30  # every 30 seconds
 
 # In-memory subscriber store (replace with Supabase later)
 # Format: {chat_id: {"is_pro": bool, "subscribed_at": datetime}}
