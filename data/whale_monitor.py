@@ -65,88 +65,117 @@ sent_alerts = set()
 
 
 async def fetch_whale_transactions() -> list[dict]:
-    """Fetch large transactions from multiple sources."""
+    """Fetch large transactions from multiple sources — both buys AND sells."""
     whales = []
 
+    search_queries = [
+        "WETH%20USDC",
+        "SOL%20USDT",
+        "WBTC%20USDT",
+        "ETH%20USDT",
+    ]
+
     async with httpx.AsyncClient(timeout=15) as client:
-        # Source 1: DexScreener — high volume pairs
-        try:
-            r = await client.get("https://api.dexscreener.com/latest/dex/search?q=WETH%20USDC")
-            if r.status_code == 200:
+        for query in search_queries:
+            try:
+                r = await client.get(f"https://api.dexscreener.com/latest/dex/search?q={query}")
+                if r.status_code != 200:
+                    continue
                 pairs = r.json().get("pairs", [])
                 for p in pairs:
                     vol = p.get("volume", {}).get("h24", 0) or 0
-                    if vol >= WHALE_THRESHOLD:
-                        pair_id = p.get("pairAddress", "")[:10]
-                        if pair_id not in sent_alerts:
-                            change = p.get("priceChange", {}).get("h24", 0) or 0
-                            whales.append({
-                                "id": pair_id,
-                                "type": "buy" if change > 0 else "sell",
-                                "token": p.get("baseToken", {}).get("symbol", "???"),
-                                "amount_usd": vol,
-                                "chain": p.get("chainId", "ethereum"),
-                                "change_24h": change,
-                                "url": p.get("url", "https://dexscreener.com"),
-                                "is_mega": vol >= MEGA_WHALE_THRESHOLD,
-                            })
-        except Exception as e:
-            log.error(f"DexScreener error: {e}")
+                    if vol < WHALE_THRESHOLD:
+                        continue
+                    pair_id = p.get("pairAddress", "")[:10]
+                    if pair_id in sent_alerts:
+                        continue
 
-        # Source 2: DexScreener — top gainers with high volume
-        try:
-            r = await client.get("https://api.dexscreener.com/latest/dex/search?q=SOL%20USDT")
-            if r.status_code == 200:
-                pairs = r.json().get("pairs", [])
-                for p in pairs:
-                    vol = p.get("volume", {}).get("h24", 0) or 0
-                    if vol >= WHALE_THRESHOLD:
-                        pair_id = p.get("pairAddress", "")[:10]
-                        if pair_id not in sent_alerts:
-                            change = p.get("priceChange", {}).get("h24", 0) or 0
-                            whales.append({
-                                "id": pair_id,
-                                "type": "buy" if change > 0 else "sell",
-                                "token": p.get("baseToken", {}).get("symbol", "???"),
-                                "amount_usd": vol,
-                                "chain": p.get("chainId", "solana"),
-                                "change_24h": change,
-                                "url": p.get("url", "https://dexscreener.com"),
-                                "is_mega": vol >= MEGA_WHALE_THRESHOLD,
-                            })
-        except Exception as e:
-            log.error(f"DexScreener source 2 error: {e}")
+                    change_5m = p.get("priceChange", {}).get("m5", 0) or 0
+                    change_1h = p.get("priceChange", {}).get("h1", 0) or 0
+                    change_24h = p.get("priceChange", {}).get("h24", 0) or 0
+                    buys = p.get("txns", {}).get("h1", {}).get("buys", 0)
+                    sells = p.get("txns", {}).get("h1", {}).get("sells", 0)
 
-    # Strict filter: nothing under $100K
+                    # Determine direction from actual txn counts + price movement
+                    if buys > sells and change_1h >= 0:
+                        direction = "buy"
+                    elif sells > buys and change_1h <= 0:
+                        direction = "sell"
+                    elif change_5m < -2 or change_1h < -3:
+                        direction = "sell"
+                    elif change_5m > 2 or change_1h > 3:
+                        direction = "buy"
+                    else:
+                        direction = "buy" if change_24h >= 0 else "sell"
+
+                    whales.append({
+                        "id": pair_id,
+                        "type": direction,
+                        "token": p.get("baseToken", {}).get("symbol", "???"),
+                        "amount_usd": vol,
+                        "chain": p.get("chainId", "unknown"),
+                        "change_5m": change_5m,
+                        "change_1h": change_1h,
+                        "change_24h": change_24h,
+                        "buys_1h": buys,
+                        "sells_1h": sells,
+                        "url": p.get("url", "https://dexscreener.com"),
+                        "is_mega": vol >= MEGA_WHALE_THRESHOLD,
+                    })
+            except Exception as e:
+                log.error(f"DexScreener error ({query}): {e}")
+
+    # Strict filter
     whales = [w for w in whales if w["amount_usd"] >= WHALE_THRESHOLD]
+    # Deduplicate by pair_id
+    seen = set()
+    unique = []
+    for w in whales:
+        if w["id"] not in seen:
+            seen.add(w["id"])
+            unique.append(w)
     # Sort by volume descending, take top alerts
-    whales.sort(key=lambda w: w["amount_usd"], reverse=True)
-    return whales[:8]
+    unique.sort(key=lambda w: w["amount_usd"], reverse=True)
+    return unique[:10]
 
 
 def format_whale_alert(whale: dict) -> str:
-    """Format a single whale alert for Telegram."""
+    """Format a single whale alert for Telegram — buys AND sells."""
+    is_sell = whale["type"] == "sell"
     emoji = "\U0001F6A8" if whale["is_mega"] else "\U0001F40B"  # 🚨 or 🐋
-    direction = "\U0001F7E2" if whale["type"] == "buy" else "\U0001F534"  # 🟢 or 🔴
+    direction = "\U0001F534" if is_sell else "\U0001F7E2"  # 🔴 or 🟢
     size_label = "MEGA WHALE" if whale["is_mega"] else "WHALE"
+    action = "SELL" if is_sell else "BUY"
+    chart_emoji = "\U0001F4C9" if is_sell else "\U0001F4C8"  # 📉 or 📈
 
-    return (
-        f"{emoji} *{size_label} ALERT* {emoji}\n\n"
-        f"{direction} *{whale['type'].upper()}* — {whale['token']}\n"
+    change_5m = whale.get("change_5m", 0)
+    change_1h = whale.get("change_1h", 0)
+    change_24h = whale.get("change_24h", 0)
+    buys = whale.get("buys_1h", 0)
+    sells = whale.get("sells_1h", 0)
+
+    msg = (
+        f"{emoji} *{size_label} {action} ALERT* {emoji}\n\n"
+        f"{direction} *{action}* — {whale['token']}\n"
         f"\U0001F4B0 Volume: *${whale['amount_usd']:,.0f}*\n"
         f"\u26D3 Chain: {whale['chain']}\n"
-        f"\U0001F4C8 24h: {whale['change_24h']:+.1f}%\n\n"
-        f"[View on DexScreener]({whale['url']})"
+        f"{chart_emoji} 5m: {change_5m:+.1f}% | 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
     )
+    if buys or sells:
+        msg += f"\U0001F4CA Txns (1h): {buys} buys / {sells} sells\n"
+    msg += f"\n[View on DexScreener]({whale['url']})"
+    return msg
 
 
 def format_whale_teaser(whale: dict) -> str:
     """Format a teaser for free users (limited info)."""
+    is_sell = whale["type"] == "sell"
+    direction = "\U0001F534 SELL" if is_sell else "\U0001F7E2 BUY"
     return (
-        f"\U0001F40B *Whale Detected!*\n\n"
-        f"{'Buy' if whale['type'] == 'buy' else 'Sell'} — *${whale['amount_usd']:,.0f}*\n"
+        f"\U0001F40B *Whale {direction} Detected!*\n\n"
+        f"\U0001F4B0 Volume: *${whale['amount_usd']:,.0f}*\n"
         f"Token: *???* | Chain: {whale['chain']}\n\n"
-        f"\U0001F512 _Upgrade to PRO to see full details and get auto-alerts!_\n"
+        f"\U0001F512 _Upgrade to PRO to see token name, charts & auto-alerts!_\n"
         f"Use /pro to upgrade"
     )
 

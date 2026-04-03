@@ -455,23 +455,28 @@ async def whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # PRO: Full details — show exactly what coin, how much, where
         msg = "🐋 *WHALE ACTIVITY — Full Report*\n\n"
         for i, tx in enumerate(txns, 1):
-            direction = "🟢 BUY" if tx["type"] == "buy" else "🔴 SELL"
+            is_sell = tx["type"] == "sell"
+            direction = "🔴 SELL" if is_sell else "🟢 BUY"
+            chart = "📉" if is_sell else "📈"
+            change_1h = tx.get("change_1h", 0)
+            change_24h = tx.get("change_24h", 0)
             msg += (
                 f"*{i}. {direction}*\n"
                 f"   🪙 Token: *{tx['token']}*\n"
                 f"   💰 Volume: *${tx['amount_usd']:,.0f}*\n"
                 f"   ⛓ Chain: {tx['chain']}\n"
+                f"   {chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
                 f"   🔗 [View Details]({tx['tx_url']})\n\n"
             )
         msg += (
-            "💡 _Whales often accumulate before big moves.\n"
-            "Follow their trades to spot opportunities early._"
+            "💡 _Watch for large sells — whales dumping can signal trouble.\n"
+            "Large buys before a move = opportunity._"
         )
     else:
         # FREE: Teaser — hide token name, show volume & direction
         msg = "🐋 *WHALE ACTIVITY — Preview*\n\n"
         for i, tx in enumerate(txns, 1):
-            direction = "🟢 BUY" if tx["type"] == "buy" else "🔴 SELL"
+            direction = "🔴 SELL" if tx["type"] == "sell" else "🟢 BUY"
             msg += (
                 f"*{i}. {direction}*\n"
                 f"   🪙 Token: *????*\n"
