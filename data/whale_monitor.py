@@ -61,7 +61,9 @@ def get_pro_subscribers() -> list[int]:
 
 
 # Track already-sent alerts to avoid duplicates
-sent_alerts = set()
+# Format: {pair_id: timestamp_sent}
+sent_alerts = {}
+ALERT_COOLDOWN = 1800  # 30 minutes — re-alert same pair after cooldown
 
 
 async def fetch_whale_transactions() -> list[dict]:
@@ -87,8 +89,11 @@ async def fetch_whale_transactions() -> list[dict]:
                     if vol < WHALE_THRESHOLD:
                         continue
                     pair_id = p.get("pairAddress", "")[:10]
+                    # Skip if alerted recently (within cooldown)
                     if pair_id in sent_alerts:
-                        continue
+                        elapsed = (datetime.utcnow() - sent_alerts[pair_id]).total_seconds()
+                        if elapsed < ALERT_COOLDOWN:
+                            continue
 
                     change_5m = p.get("priceChange", {}).get("m5", 0) or 0
                     change_1h = p.get("priceChange", {}).get("h1", 0) or 0
@@ -206,7 +211,7 @@ async def notify_pro_users(whales: list[dict]):
 
     for whale in whales:
         msg = format_whale_alert(whale)
-        sent_alerts.add(whale["id"])
+        sent_alerts[whale["id"]] = datetime.utcnow()
 
         for chat_id in pro_users:
             await send_telegram_message(chat_id, msg)
@@ -222,8 +227,14 @@ async def monitor_loop():
 
     while True:
         try:
+            # Clean expired cooldowns
+            now = datetime.utcnow()
+            expired = [k for k, v in sent_alerts.items() if (now - v).total_seconds() >= ALERT_COOLDOWN]
+            for k in expired:
+                del sent_alerts[k]
+
             whales = await fetch_whale_transactions()
-            new_whales = [w for w in whales if w["id"] not in sent_alerts]
+            new_whales = [w for w in whales if w["id"] not in sent_alerts or (now - sent_alerts[w["id"]]).total_seconds() >= ALERT_COOLDOWN]
 
             if new_whales:
                 log.info(f"Found {len(new_whales)} new whale transactions")
