@@ -14,6 +14,9 @@ import httpx
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Survives an ISP that stops resolving api.telegram.org (see net_resilient.py).
+import net_resilient  # noqa: F401,E402
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -25,8 +28,11 @@ BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # Thresholds for whale alerts (in USD)
-WHALE_THRESHOLD = 500_000  # $500K+ = whale
-MEGA_WHALE_THRESHOLD = 5_000_000  # $5M+ = mega whale
+# Thresholds now live in data/whale_source.py, where each one is sized
+# against the asset's own liquidity instead of a single global number.
+from data.whale_source import ONCHAIN_MIN_USD, PRINT_FLOOR_USD
+
+MAX_ALERTS_PER_CYCLE = 6  # a paid feed people keep reading, not a firehose
 
 # Check interval in seconds
 CHECK_INTERVAL = 30  # every 30 seconds
@@ -67,139 +73,154 @@ ALERT_COOLDOWN = 1800  # 30 minutes — re-alert same pair after cooldown
 
 
 async def fetch_whale_transactions() -> list[dict]:
-    """Fetch large transactions from multiple sources — both buys AND sells."""
-    whales = []
+    """Real whale events: on-chain transfers plus large exchange fills."""
+    from data.whale_source import fetch_whales
+    return await fetch_whales()
 
-    search_queries = [
-        "WETH%20USDC",
-        "SOL%20USDT",
-        "WBTC%20USDT",
-        "ETH%20USDT",
-    ]
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        for query in search_queries:
-            try:
-                r = await client.get(f"https://api.dexscreener.com/latest/dex/search?q={query}")
-                if r.status_code != 200:
-                    continue
-                pairs = r.json().get("pairs", [])
-                for p in pairs:
-                    vol = p.get("volume", {}).get("h24", 0) or 0
-                    if vol < WHALE_THRESHOLD:
-                        continue
-                    pair_id = p.get("pairAddress", "")[:10]
-                    # Skip if alerted recently (within cooldown)
-                    if pair_id in sent_alerts:
-                        elapsed = (datetime.utcnow() - sent_alerts[pair_id]).total_seconds()
-                        if elapsed < ALERT_COOLDOWN:
-                            continue
+def _money(n: float) -> str:
+    """$177,030,737 reads slower than $177.0M in a phone notification."""
+    if n >= 1_000_000_000:
+        return f"${n / 1_000_000_000:.2f}B"
+    if n >= 1_000_000:
+        return f"${n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"${n / 1_000:.0f}K"
+    return f"${n:,.0f}"
 
-                    change_5m = p.get("priceChange", {}).get("m5", 0) or 0
-                    change_1h = p.get("priceChange", {}).get("h1", 0) or 0
-                    change_24h = p.get("priceChange", {}).get("h24", 0) or 0
-                    buys = p.get("txns", {}).get("h1", {}).get("buys", 0)
-                    sells = p.get("txns", {}).get("h1", {}).get("sells", 0)
 
-                    # Determine direction from actual txn counts + price movement
-                    if buys > sells and change_1h >= 0:
-                        direction = "buy"
-                    elif sells > buys and change_1h <= 0:
-                        direction = "sell"
-                    elif change_5m < -2 or change_1h < -3:
-                        direction = "sell"
-                    elif change_5m > 2 or change_1h > 3:
-                        direction = "buy"
-                    else:
-                        direction = "buy" if change_24h >= 0 else "sell"
-
-                    whales.append({
-                        "id": pair_id,
-                        "type": direction,
-                        "token": p.get("baseToken", {}).get("symbol", "???"),
-                        "amount_usd": vol,
-                        "chain": p.get("chainId", "unknown"),
-                        "change_5m": change_5m,
-                        "change_1h": change_1h,
-                        "change_24h": change_24h,
-                        "buys_1h": buys,
-                        "sells_1h": sells,
-                        "url": p.get("url", "https://dexscreener.com"),
-                        "is_mega": vol >= MEGA_WHALE_THRESHOLD,
-                    })
-            except Exception as e:
-                log.error(f"DexScreener error ({query}): {e}")
-
-    # Strict filter
-    whales = [w for w in whales if w["amount_usd"] >= WHALE_THRESHOLD]
-    # Deduplicate by pair_id
-    seen = set()
-    unique = []
-    for w in whales:
-        if w["id"] not in seen:
-            seen.add(w["id"])
-            unique.append(w)
-    # Sort by volume descending, take top alerts
-    unique.sort(key=lambda w: w["amount_usd"], reverse=True)
-    return unique[:10]
+def _qty(n: float) -> str:
+    """Coin amounts, never in scientific notation (1.101e+06 helps nobody)."""
+    if n >= 1_000_000:
+        return f"{n:,.0f}"
+    if n >= 1:
+        return f"{n:,.2f}".rstrip("0").rstrip(".")
+    return f"{n:.6f}".rstrip("0").rstrip(".")
 
 
 def format_whale_alert(whale: dict) -> str:
-    """Format a single whale alert for Telegram — buys AND sells."""
+    """
+    Format one real whale event. Every alert names what happened, how big it
+    was, and links to the proof (a tx hash on-chain, the pair on the exchange).
+    """
+    kind = whale.get("kind", "print")
+    token = whale["token"]
+    usd = whale["amount_usd"]
+    change_1h = whale.get("change_1h", 0) or 0
+    change_24h = whale.get("change_24h", 0) or 0
+    mega = whale.get("is_mega")
+
+    if kind == "onchain":
+        head = "\U0001F6A8 *MEGA WHALE MOVE*" if mega else "\U0001F40B *WHALE MOVE*"
+        native = whale.get("amount_native", 0)
+        unit = whale.get("unit", token)
+        amount = f"{_qty(native)} {unit}" if native else _money(usd)
+        msg = (
+            f"{head}\n\n"
+            f"*{amount}* moved on {whale.get('chain', '').title()}\n"
+            f"\U0001F4B0 Value: *{_money(usd)}*\n"
+        )
+        if unit not in ("USDT", "USDC"):
+            msg += f"\U0001F4C8 {unit} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
+        msg += f"\n[Verify on explorer]({whale['url']})"
+        return msg
+
     is_sell = whale["type"] == "sell"
-    emoji = "\U0001F6A8" if whale["is_mega"] else "\U0001F40B"  # 🚨 or 🐋
-    direction = "\U0001F534" if is_sell else "\U0001F7E2"  # 🔴 or 🟢
-    size_label = "MEGA WHALE" if whale["is_mega"] else "WHALE"
-    action = "SELL" if is_sell else "BUY"
-    chart_emoji = "\U0001F4C9" if is_sell else "\U0001F4C8"  # 📉 or 📈
+    side = "SELL" if is_sell else "BUY"
+    dot = "\U0001F534" if is_sell else "\U0001F7E2"
+    chart = "\U0001F4C9" if is_sell else "\U0001F4C8"
 
-    change_5m = whale.get("change_5m", 0)
-    change_1h = whale.get("change_1h", 0)
-    change_24h = whale.get("change_24h", 0)
-    buys = whale.get("buys_1h", 0)
-    sells = whale.get("sells_1h", 0)
+    if kind == "flow":
+        head = "\U0001F6A8 *WHALE FLOW SURGE*" if mega else "\U0001F30A *WHALE FLOW*"
+        buys = whale.get("window_buys_usd", 0)
+        sells = whale.get("window_sells_usd", 0)
+        return (
+            f"{head}\n\n"
+            f"{dot} *{_money(usd)} net {side}* on {token} in 60 seconds\n"
+            f"\U0001F4CA Takers: {_money(buys)} bought vs {_money(sells)} sold\n"
+            f"\U0001F4B5 Price: ${whale.get('price', 0):,.4g}\n"
+            f"{chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
+            f"\n[Trade {token}]({whale['url']})"
+        )
 
-    msg = (
-        f"{emoji} *{size_label} {action} ALERT* {emoji}\n\n"
-        f"{direction} *{action}* — {whale['token']}\n"
-        f"\U0001F4B0 Volume: *${whale['amount_usd']:,.0f}*\n"
-        f"\u26D3 Chain: {whale['chain']}\n"
-        f"{chart_emoji} 5m: {change_5m:+.1f}% | 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
+    head = "\U0001F6A8 *BLOCK TRADE*" if mega else "\U0001F40B *WHALE ORDER*"
+    return (
+        f"{head}\n\n"
+        f"{dot} *{_money(usd)} market {side}* \u2014 {token}\n"
+        f"\U0001F4E6 Size: {_qty(whale.get('amount_native', 0))} {token} "
+        f"@ ${whale.get('price', 0):,.4g}\n"
+        f"\U0001F3E6 {whale.get('venue', 'exchange')}, filled in one order\n"
+        f"{chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
+        f"\n[Trade {token}]({whale['url']})"
     )
-    if buys or sells:
-        msg += f"\U0001F4CA Txns (1h): {buys} buys / {sells} sells\n"
-    msg += f"\n[View on DexScreener]({whale['url']})"
-    return msg
 
 
 def format_whale_teaser(whale: dict) -> str:
-    """Format a teaser for free users (limited info)."""
-    is_sell = whale["type"] == "sell"
-    direction = "\U0001F534 SELL" if is_sell else "\U0001F7E2 BUY"
+    """Free users see that something real happened, not what it was."""
+    kind = whale.get("kind", "print")
+    usd = whale["amount_usd"]
+    if kind == "onchain":
+        line = f"\U0001F40B *Whale transfer detected on {whale.get('chain', 'chain').title()}*"
+        what = f"\U0001F4B0 Value: *{_money(usd)}*\nAsset: *???*"
+    else:
+        side = "\U0001F534 SELL" if whale["type"] == "sell" else "\U0001F7E2 BUY"
+        line = f"\U0001F40B *Whale {side} detected*"
+        what = f"\U0001F4B0 Size: *{_money(usd)}*\nToken: *???* | {whale.get('venue', '')}"
     return (
-        f"\U0001F40B *Whale {direction} Detected!*\n\n"
-        f"\U0001F4B0 Volume: *${whale['amount_usd']:,.0f}*\n"
-        f"Token: *???* | Chain: {whale['chain']}\n\n"
-        f"\U0001F512 _Upgrade to PRO to see token name, charts & auto-alerts!_\n"
-        f"Use /pro to upgrade"
+        f"{line}\n\n{what}\n\n"
+        "\U0001F512 _PRO shows the asset, the price, the wallet link and sends "
+        "these the second they happen._\n"
+        "Use /pro to upgrade"
     )
 
 
-async def send_telegram_message(chat_id: int, text: str):
-    """Send a message via Telegram Bot API."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            await client.post(
-                f"{TELEGRAM_API}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-            )
-        except Exception as e:
-            log.error(f"Failed to send to {chat_id}: {e}")
+async def send_telegram_message(chat_id: int, text: str) -> bool:
+    """
+    Send one alert and report whether it truly landed.
+
+    The old version fired the request and ignored the response, so a token
+    called WIF_2 breaking Markdown came back 400 and looked exactly like a
+    delivered alert. A paying user would have silently received nothing.
+    """
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        for attempt in range(3):
+            try:
+                r = await client.post(f"{TELEGRAM_API}/sendMessage", json=payload)
+                if r.status_code == 200:
+                    return True
+
+                body = r.text[:200]
+                # Bad formatting is permanent: retrying sends the same 400
+                # forever. Drop the markup and deliver the content instead.
+                if r.status_code == 400 and "parse" in body.lower():
+                    log.warning(f"markdown rejected for {chat_id}, resending as plain text")
+                    plain = dict(payload)
+                    plain.pop("parse_mode")
+                    r2 = await client.post(f"{TELEGRAM_API}/sendMessage", json=plain)
+                    if r2.status_code == 200:
+                        return True
+                    log.error(f"plain-text retry failed for {chat_id}: {r2.status_code} {r2.text[:200]}")
+                    return False
+
+                if r.status_code == 429:
+                    wait = r.json().get("parameters", {}).get("retry_after", 3)
+                    log.warning(f"rate limited, waiting {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
+
+                log.error(f"send to {chat_id} failed: {r.status_code} {body}")
+                return False
+            except Exception as e:
+                log.warning(f"send to {chat_id} attempt {attempt + 1} errored: {e!r}")
+                await asyncio.sleep(2 * (attempt + 1))
+    log.error(f"send to {chat_id} gave up after 3 attempts")
+    return False
 
 
 async def notify_pro_users(whales: list[dict]):
@@ -209,21 +230,33 @@ async def notify_pro_users(whales: list[dict]):
         log.info("No PRO subscribers to notify")
         return
 
+    delivered = 0
+    failed = 0
     for whale in whales:
         msg = format_whale_alert(whale)
         sent_alerts[whale["id"]] = datetime.utcnow()
 
         for chat_id in pro_users:
-            await send_telegram_message(chat_id, msg)
+            if await send_telegram_message(chat_id, msg):
+                delivered += 1
+            else:
+                failed += 1
             await asyncio.sleep(0.1)  # Rate limit
 
-    log.info(f"Sent {len(whales)} alerts to {len(pro_users)} PRO users")
+    # Count what Telegram accepted, not what we attempted.
+    log.info(
+        f"Delivered {delivered}/{delivered + failed} alerts to {len(pro_users)} PRO users"
+        + (f" ({failed} FAILED)" if failed else "")
+    )
 
 
 async def monitor_loop():
     """Main monitoring loop."""
     log.info("\U0001F40B Whale Monitor started!")
-    log.info(f"Checking every {CHECK_INTERVAL}s | Threshold: ${WHALE_THRESHOLD:,}")
+    log.info(
+        f"Checking every {CHECK_INTERVAL}s | on-chain floor ${ONCHAIN_MIN_USD:,.0f} "
+        f"| exchange print floor ${PRINT_FLOOR_USD:,.0f}"
+    )
 
     while True:
         try:
@@ -237,8 +270,14 @@ async def monitor_loop():
             new_whales = [w for w in whales if w["id"] not in sent_alerts or (now - sent_alerts[w["id"]]).total_seconds() >= ALERT_COOLDOWN]
 
             if new_whales:
-                log.info(f"Found {len(new_whales)} new whale transactions")
-                await notify_pro_users(new_whales)
+                new_whales.sort(key=lambda w: w["amount_usd"], reverse=True)
+                batch = new_whales[:MAX_ALERTS_PER_CYCLE]
+                dropped = len(new_whales) - len(batch)
+                log.info(
+                    f"Found {len(new_whales)} whale events, sending {len(batch)}"
+                    + (f" (dropped {dropped} smaller)" if dropped else "")
+                )
+                await notify_pro_users(batch)
             else:
                 log.debug("No new whale transactions")
 

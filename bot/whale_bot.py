@@ -18,6 +18,9 @@ from supabase import create_client
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Survives an ISP that stops resolving api.telegram.org (see net_resilient.py).
+import net_resilient  # noqa: F401,E402
+
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -451,9 +454,19 @@ async def whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No significant whale activity detected right now. Check back soon!")
         return
 
+    from data.whale_monitor import _qty
+
+    def _age(seconds: float) -> str:
+        seconds = int(seconds or 0)
+        if seconds < 90:
+            return f"{seconds}s ago"
+        if seconds < 5400:
+            return f"{seconds // 60}m ago"
+        return f"{seconds // 3600}h ago"
+
     if user["is_pro"]:
-        # PRO: Full details — show exactly what coin, how much, where
-        msg = "🐋 *WHALE ACTIVITY — Full Report*\n\n"
+        # PRO: the actual order — size, price, venue, when it filled
+        msg = "🐋 *BIGGEST WHALE ORDERS RIGHT NOW*\n\n"
         for i, tx in enumerate(txns, 1):
             is_sell = tx["type"] == "sell"
             direction = "🔴 SELL" if is_sell else "🟢 BUY"
@@ -461,27 +474,27 @@ async def whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
             change_1h = tx.get("change_1h", 0)
             change_24h = tx.get("change_24h", 0)
             msg += (
-                f"*{i}. {direction}*\n"
-                f"   🪙 Token: *{tx['token']}*\n"
-                f"   💰 Volume: *${tx['amount_usd']:,.0f}*\n"
-                f"   ⛓ Chain: {tx['chain']}\n"
-                f"   {chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
-                f"   🔗 [View Details]({tx['tx_url']})\n\n"
+                f"*{i}. {direction} {tx['token']}* — *${tx['amount_usd']:,.0f}*\n"
+                f"   📦 {_qty(tx.get('amount_native', 0))} {tx['token']} "
+                f"@ ${tx.get('price', 0):,.4g}\n"
+                f"   🏦 {tx.get('venue', 'exchange')} · {_age(tx.get('age_s'))}\n"
+                f"   {chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n\n"
             )
         msg += (
-            "💡 _Watch for large sells — whales dumping can signal trouble.\n"
-            "Large buys before a move = opportunity._"
+            "💡 _These are single market orders, not daily volume._\n"
+            "_Auto-alerts also cover Bitcoin and Ethereum transfers above "
+            "$5M as soon as the block confirms._"
         )
     else:
-        # FREE: Teaser — hide token name, show volume & direction
-        msg = "🐋 *WHALE ACTIVITY — Preview*\n\n"
+        # FREE: prove it is real, hide what it was
+        msg = "🐋 *WHALE ORDERS — Preview*\n\n"
         for i, tx in enumerate(txns, 1):
             direction = "🔴 SELL" if tx["type"] == "sell" else "🟢 BUY"
             msg += (
                 f"*{i}. {direction}*\n"
                 f"   🪙 Token: *????*\n"
-                f"   💰 Volume: *${tx['amount_usd']:,.0f}*\n"
-                f"   ⛓ Chain: {tx['chain']}\n\n"
+                f"   💰 Order size: *${tx['amount_usd']:,.0f}*\n"
+                f"   🏦 {tx.get('venue', 'exchange')} · {_age(tx.get('age_s'))}\n\n"
             )
         remaining = FREE_DAILY_LIMIT - user.get("alerts_today", 1)
         msg += (

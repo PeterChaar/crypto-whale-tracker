@@ -121,62 +121,14 @@ async def get_top_movers() -> dict | None:
 
 async def get_recent_whales(limit: int = 5) -> list[dict]:
     """
-    Get recent large transactions from DexScreener — both buys AND sells.
+    Largest real trades visible right now, for the on-demand /whales command.
+
+    Auto-alerts come from data.whale_source, which watches blocks and live
+    order flow. This is the same data seen as a snapshot, because a user
+    running /whales cannot wait ten minutes for the next Bitcoin block.
     """
-    whales = []
-    queries = ["WETH%20USDC", "SOL%20USDT", "WBTC%20USDT"]
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        for query in queries:
-            try:
-                r = await client.get(f"{DEXSCREENER_BASE}/dex/search?q={query}")
-                if r.status_code != 200:
-                    continue
-                pairs = r.json().get("pairs", [])
-                for pair in pairs:
-                    vol = pair.get("volume", {}).get("h24", 0) or 0
-                    if vol < 500_000:
-                        continue
-
-                    change_5m = pair.get("priceChange", {}).get("m5", 0) or 0
-                    change_1h = pair.get("priceChange", {}).get("h1", 0) or 0
-                    change_24h = pair.get("priceChange", {}).get("h24", 0) or 0
-                    buys = pair.get("txns", {}).get("h1", {}).get("buys", 0)
-                    sells = pair.get("txns", {}).get("h1", {}).get("sells", 0)
-
-                    if buys > sells and change_1h >= 0:
-                        direction = "buy"
-                    elif sells > buys and change_1h <= 0:
-                        direction = "sell"
-                    elif change_5m < -2 or change_1h < -3:
-                        direction = "sell"
-                    elif change_5m > 2 or change_1h > 3:
-                        direction = "buy"
-                    else:
-                        direction = "buy" if change_24h >= 0 else "sell"
-
-                    whales.append({
-                        "type": direction,
-                        "amount_usd": vol,
-                        "token": pair.get("baseToken", {}).get("symbol", "???"),
-                        "chain": pair.get("chainId", "unknown"),
-                        "tx_url": pair.get("url", "https://dexscreener.com"),
-                        "change_1h": change_1h,
-                        "change_24h": change_24h,
-                    })
-            except Exception as e:
-                log.error(f"Whale fetch error ({query}): {e}")
-
-    # Deduplicate by token
-    seen = set()
-    unique = []
-    for w in whales:
-        if w["token"] not in seen:
-            seen.add(w["token"])
-            unique.append(w)
-
-    unique.sort(key=lambda w: w["amount_usd"], reverse=True)
-    return unique[:limit]
+    from data.whale_source import fetch_recent_snapshot
+    return await fetch_recent_snapshot(limit=limit)
 
 
 async def get_gas_prices() -> dict | None:
