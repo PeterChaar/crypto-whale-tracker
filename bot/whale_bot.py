@@ -454,7 +454,7 @@ async def whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No significant whale activity detected right now. Check back soon!")
         return
 
-    from data.whale_monitor import _qty
+    from data.whale_monitor import _qty, _price
 
     def _age(seconds: float) -> str:
         seconds = int(seconds or 0)
@@ -476,7 +476,7 @@ async def whales(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += (
                 f"*{i}. {direction} {tx['token']}* — *${tx['amount_usd']:,.0f}*\n"
                 f"   📦 {_qty(tx.get('amount_native', 0))} {tx['token']} "
-                f"@ ${tx.get('price', 0):,.4g}\n"
+                f"@ ${_price(tx.get('price', 0))}\n"
                 f"   🏦 {tx.get('venue', 'exchange')} · {_age(tx.get('age_s'))}\n"
                 f"   {chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n\n"
             )

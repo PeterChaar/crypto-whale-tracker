@@ -98,6 +98,15 @@ def _qty(n: float) -> str:
     return f"{n:.6f}".rstrip("0").rstrip(".")
 
 
+def _price(n: float) -> str:
+    """Prices, never as $6.356e+04."""
+    if n >= 1000:
+        return f"{n:,.2f}"
+    if n >= 1:
+        return f"{n:,.4f}".rstrip("0").rstrip(".")
+    return f"{n:.8f}".rstrip("0").rstrip(".")
+
+
 def format_whale_alert(whale: dict) -> str:
     """
     Format one real whale event. Every alert names what happened, how big it
@@ -138,7 +147,7 @@ def format_whale_alert(whale: dict) -> str:
             f"{head}\n\n"
             f"{dot} *{_money(usd)} net {side}* on {token} in 60 seconds\n"
             f"\U0001F4CA Takers: {_money(buys)} bought vs {_money(sells)} sold\n"
-            f"\U0001F4B5 Price: ${whale.get('price', 0):,.4g}\n"
+            f"\U0001F4B5 Price: ${_price(whale.get('price', 0))}\n"
             f"{chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
             f"\n[Trade {token}]({whale['url']})"
         )
@@ -148,7 +157,7 @@ def format_whale_alert(whale: dict) -> str:
         f"{head}\n\n"
         f"{dot} *{_money(usd)} market {side}* \u2014 {token}\n"
         f"\U0001F4E6 Size: {_qty(whale.get('amount_native', 0))} {token} "
-        f"@ ${whale.get('price', 0):,.4g}\n"
+        f"@ ${_price(whale.get('price', 0))}\n"
         f"\U0001F3E6 {whale.get('venue', 'exchange')}, filled in one order\n"
         f"{chart} 1h: {change_1h:+.1f}% | 24h: {change_24h:+.1f}%\n"
         f"\n[Trade {token}]({whale['url']})"
