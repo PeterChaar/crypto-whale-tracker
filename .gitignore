@@ -25,3 +25,4 @@ dashboard/.netlify/
 # OS
 .DS_Store
 .supervisor.lock
+pending_followups.json

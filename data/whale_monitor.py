@@ -31,6 +31,7 @@ TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # Thresholds now live in data/whale_source.py, where each one is sized
 # against the asset's own liquidity instead of a single global number.
 from data.whale_source import ONCHAIN_MIN_USD, PRINT_FLOOR_USD
+from data import track_record
 
 MAX_ALERTS_PER_CYCLE = 6  # a paid feed people keep reading, not a firehose
 
@@ -221,6 +222,41 @@ def format_public_post(whale: dict) -> str:
     )
 
 
+async def post_due_followups():
+    """
+    Post what the price did after an earlier alert, as a reply under it.
+
+    This is the channel's proof. It runs whatever the outcome was, so the
+    thread shows the misses next to the hits.
+    """
+    if not PUBLIC_CHANNEL:
+        return
+    due = track_record.take_due()
+    if not due:
+        return
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        for row in due:
+            try:
+                r = await client.get(
+                    "https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": row["symbol"]},
+                )
+                if r.status_code != 200:
+                    continue
+                price_now = float(r.json()["price"])
+            except Exception as e:
+                log.warning(f"follow-up price fetch failed: {e}")
+                continue
+
+            text = track_record.format_followup(row, price_now)
+            if text:
+                await send_telegram_message(
+                    PUBLIC_CHANNEL, text, reply_to=row.get("message_id")
+                )
+                log.info(f"posted follow-up for message {row.get('message_id')}")
+
+
 async def broadcast_public(whales: list[dict]):
     """Post the biggest on-chain moves to the public channel, if configured."""
     if not PUBLIC_CHANNEL:
@@ -235,15 +271,21 @@ async def broadcast_public(whales: list[dict]):
 
     sent = 0
     for whale in posts:
-        if await send_telegram_message(PUBLIC_CHANNEL, format_public_post(whale)):
+        message_id = await send_telegram_message(PUBLIC_CHANNEL, format_public_post(whale))
+        if message_id:
             sent += 1
+            # Schedule the proof that goes under this exact post.
+            track_record.remember(whale, message_id)
         await asyncio.sleep(0.5)
     log.info(f"Posted {sent}/{len(posts)} to public channel {PUBLIC_CHANNEL}")
 
 
-async def send_telegram_message(chat_id, text: str) -> bool:
+async def send_telegram_message(chat_id, text: str, reply_to: int | None = None):
     """
-    Send one alert and report whether it truly landed.
+    Send one message and report whether it truly landed.
+
+    Returns the Telegram message_id on success and None on failure, so callers
+    can both count deliveries and reply under what they just posted.
 
     The old version fired the request and ignored the response, so a token
     called WIF_2 breaking Markdown came back 400 and looked exactly like a
@@ -255,12 +297,16 @@ async def send_telegram_message(chat_id, text: str) -> bool:
         "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
+    if reply_to:
+        payload["reply_to_message_id"] = reply_to
+        # A follow-up whose parent was deleted should still post.
+        payload["allow_sending_without_reply"] = True
     async with httpx.AsyncClient(timeout=15) as client:
         for attempt in range(3):
             try:
                 r = await client.post(f"{TELEGRAM_API}/sendMessage", json=payload)
                 if r.status_code == 200:
-                    return True
+                    return r.json().get("result", {}).get("message_id") or True
 
                 body = r.text[:200]
                 # Bad formatting is permanent: retrying sends the same 400
@@ -271,9 +317,9 @@ async def send_telegram_message(chat_id, text: str) -> bool:
                     plain.pop("parse_mode")
                     r2 = await client.post(f"{TELEGRAM_API}/sendMessage", json=plain)
                     if r2.status_code == 200:
-                        return True
+                        return r2.json().get("result", {}).get("message_id") or True
                     log.error(f"plain-text retry failed for {chat_id}: {r2.status_code} {r2.text[:200]}")
-                    return False
+                    return None
 
                 if r.status_code == 429:
                     wait = r.json().get("parameters", {}).get("retry_after", 3)
@@ -282,12 +328,12 @@ async def send_telegram_message(chat_id, text: str) -> bool:
                     continue
 
                 log.error(f"send to {chat_id} failed: {r.status_code} {body}")
-                return False
+                return None
             except Exception as e:
                 log.warning(f"send to {chat_id} attempt {attempt + 1} errored: {e!r}")
                 await asyncio.sleep(2 * (attempt + 1))
     log.error(f"send to {chat_id} gave up after 3 attempts")
-    return False
+    return None
 
 
 async def notify_pro_users(whales: list[dict]):
@@ -332,6 +378,9 @@ async def monitor_loop():
             expired = [k for k, v in sent_alerts.items() if (now - v).total_seconds() >= ALERT_COOLDOWN]
             for k in expired:
                 del sent_alerts[k]
+
+            # Proof for earlier alerts goes out even in a quiet cycle.
+            await post_due_followups()
 
             whales = await fetch_whale_transactions()
             new_whales = [w for w in whales if w["id"] not in sent_alerts or (now - sent_alerts[w["id"]]).total_seconds() >= ALERT_COOLDOWN]
