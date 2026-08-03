@@ -14,7 +14,7 @@ import secrets
 from datetime import datetime, timedelta
 
 import httpx
-from supabase import create_client
+import store
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -39,10 +39,11 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 
-# ── Supabase ─────────────────────────────────────────────────────────────────
-SUPABASE_URL = "https://zeyqrpfwcvhtzpwjvpfg.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpleXFycGZ3Y3ZodHpwd2p2cGZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyNzUyNTYsImV4cCI6MjA4NTg1MTI1Nn0.BNBhmZMbxgLP8uKfW86ZY5gv_2ZBPXAZQITVAv_NqDg"
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ── Durable state ────────────────────────────────────────────────────────────
+# Subscriber, pending-payment and processed-transaction state all used to live
+# in JSON files on Railway's ephemeral disk, so every redeploy wiped paying
+# customers and made old wallet transfers look creditable again. store.py keeps
+# Postgres as the source of truth; these files are now just a cache.
 
 
 def generate_auth_token():
@@ -50,30 +51,25 @@ def generate_auth_token():
 
 
 def sync_to_supabase(chat_id: int, is_pro: bool, username: str = "", upgraded_at=None, pro_expires=None):
-    """Sync subscriber status to Supabase so the website can check it."""
-    try:
-        row = {
-            "chat_id": chat_id,
+    """Write one subscriber through to the durable store. Returns an auth token
+    for the web dashboard when the user is Pro."""
+    token = generate_auth_token() if is_pro else None
+    store.push_sub(
+        chat_id,
+        {
             "is_pro": is_pro,
             "username": username,
-        }
-        if upgraded_at:
-            row["upgraded_at"] = upgraded_at
-        if pro_expires:
-            row["pro_expires"] = pro_expires
-        if is_pro:
-            # Generate auth token for website login
-            row["auth_token"] = generate_auth_token()
-        sb.table("subscribers").upsert(row, on_conflict="chat_id").execute()
-        log.info(f"Supabase sync: {chat_id} is_pro={is_pro}")
-        return row.get("auth_token")
-    except Exception as e:
-        log.error(f"Supabase sync error: {e}")
-        return None
+            "upgraded_at": upgraded_at,
+            "pro_expires": pro_expires,
+            "auth_token": token,
+        },
+    )
+    return token
 
 
 # ── Subscriber Management ────────────────────────────────────────────────────
-SUBSCRIBERS_FILE = os.path.join(os.path.dirname(__file__), "..", "subscribers.json")
+# Cache file paths live in store.py now, so there is one definition of where
+# state goes rather than two that can drift apart.
 FREE_DAILY_LIMIT = 3
 PRO_DURATION_DAYS = 30
 ADMIN_CHAT_ID = 8421183029
@@ -82,22 +78,17 @@ ADMIN_CHAT_ID = 8421183029
 WALLET_ADDRESS = "TDYjRLZwjpehxSKVphhjDkd54NyzWdCxDY"
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 TRONGRID_URL = f"https://api.trongrid.io/v1/accounts/{WALLET_ADDRESS}/transactions/trc20"
-PENDING_FILE = os.path.join(os.path.dirname(__file__), "..", "pending_payments.json")
-PROCESSED_FILE = os.path.join(os.path.dirname(__file__), "..", "processed_txs.json")
 PRO_PRICE = 9.99
 
 
-def load_subs() -> dict:
-    try:
-        with open(SUBSCRIBERS_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+load_subs = store.load_subs
+save_subs = store.save_subs
 
 
-def save_subs(subs: dict):
-    with open(SUBSCRIBERS_FILE, "w") as f:
-        json.dump(subs, f, indent=2, default=str)
+def _persist(chat_id: int, subs: dict) -> None:
+    """Save the cache and write that one subscriber through to Postgres."""
+    save_subs(subs)
+    store.push_sub(chat_id, subs.get(str(chat_id), {}))
 
 
 def get_user(chat_id: int) -> dict:
@@ -106,20 +97,20 @@ def get_user(chat_id: int) -> dict:
     today = datetime.utcnow().date().isoformat()
     if key not in subs:
         subs[key] = {"is_pro": False, "alerts_today": 0, "last_reset": today, "username": ""}
-        save_subs(subs)
+        _persist(chat_id, subs)
     user = subs[key]
     # Reset daily alerts
     if user.get("last_reset") != today:
         user["alerts_today"] = 0
         user["last_reset"] = today
         subs[key] = user
-        save_subs(subs)
+        _persist(chat_id, subs)
     # Admin is always Pro
     if chat_id == ADMIN_CHAT_ID:
         if not user.get("is_pro"):
             user["is_pro"] = True
             subs[key] = user
-            save_subs(subs)
+            _persist(chat_id, subs)
         return user
     # Check if Pro subscription expired
     if user.get("is_pro") and user.get("pro_expires"):
@@ -128,9 +119,8 @@ def get_user(chat_id: int) -> dict:
             if datetime.utcnow() > expires:
                 user["is_pro"] = False
                 subs[key] = user
-                save_subs(subs)
+                _persist(chat_id, subs)
                 log.info(f"User {chat_id} Pro expired, downgraded to free")
-                sync_to_supabase(chat_id, False, user.get("username", ""))
         except (ValueError, TypeError):
             pass
     return user
@@ -143,7 +133,7 @@ def update_user(chat_id: int, data: dict):
         subs[key].update(data)
     else:
         subs[key] = data
-    save_subs(subs)
+    _persist(chat_id, subs)
 
 
 def increment_alerts(chat_id: int):
@@ -151,7 +141,7 @@ def increment_alerts(chat_id: int):
     key = str(chat_id)
     if key in subs:
         subs[key]["alerts_today"] = subs[key].get("alerts_today", 0) + 1
-        save_subs(subs)
+        _persist(chat_id, subs)
 
 
 def set_pro(chat_id: int, username: str = ""):
@@ -166,29 +156,18 @@ def set_pro(chat_id: int, username: str = ""):
         "username": username,
         "upgraded_at": now.isoformat(),
         "pro_expires": expires.isoformat(),
+        # Kept alongside the rest so the dashboard token survives a redeploy
+        # too, instead of being minted into Postgres and lost locally.
+        "auth_token": generate_auth_token(),
     }
-    save_subs(subs)
+    _persist(chat_id, subs)
     log.info(f"User {chat_id} ({username}) upgraded to PRO — expires {expires.date()}")
-    sync_to_supabase(chat_id, True, username, now.isoformat(), expires.isoformat())
 
 
 # ── Pending Payments (FIFO queue) ─────────────────────────────────────────────
 
-def load_pending() -> list:
-    try:
-        with open(PENDING_FILE, "r") as f:
-            data = json.load(f)
-            # Migrate old dict format to list
-            if isinstance(data, dict):
-                return []
-            return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-
-def save_pending(pending: list):
-    with open(PENDING_FILE, "w") as f:
-        json.dump(pending, f, indent=2, default=str)
+load_pending = store.load_pending
+save_pending = store.save_pending
 
 
 def add_pending_payment(chat_id: int, username: str = ""):
@@ -197,36 +176,24 @@ def add_pending_payment(chat_id: int, username: str = ""):
     for p in pending:
         if p["chat_id"] == chat_id:
             return
+    created_at = datetime.utcnow().isoformat()
     pending.append({
         "chat_id": chat_id,
         "username": username,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": created_at,
     })
     save_pending(pending)
+    store.push_pending(chat_id, username, created_at)
 
 
 def remove_pending_payment(chat_id: int):
     pending = load_pending()
     pending = [p for p in pending if p["chat_id"] != chat_id]
     save_pending(pending)
+    store.drop_pending(chat_id)
 
 
-def load_processed_txs() -> set:
-    try:
-        with open(PROCESSED_FILE, "r") as f:
-            return set(json.load(f))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set()
-
-
-def save_processed_tx(tx_id: str):
-    processed = load_processed_txs()
-    processed.add(tx_id)
-    proc_list = list(processed)
-    if len(proc_list) > 200:
-        proc_list = proc_list[-200:]
-    with open(PROCESSED_FILE, "w") as f:
-        json.dump(proc_list, f)
+load_processed_txs = store.load_processed_txs
 
 
 # ── Blockchain Payment Monitor ───────────────────────────────────────────────
@@ -244,7 +211,10 @@ async def check_incoming_payments(bot):
         if (now - datetime.fromisoformat(p["created_at"])).total_seconds() < 172800
     ]
     if len(cleaned) != len(pending):
+        stale = {p["chat_id"] for p in pending} - {p["chat_id"] for p in cleaned}
         save_pending(cleaned)
+        for chat_id in stale:
+            store.drop_pending(chat_id)
         pending = cleaned
     if not pending:
         return
@@ -295,9 +265,17 @@ async def check_incoming_payments(bot):
         chat_id = info["chat_id"]
         username = info.get("username", "")
 
-        # Auto-upgrade
+        # Claim the transfer BEFORE granting anything. The old order granted
+        # Pro first and recorded the transaction second, so a crash in between
+        # left the transfer looking fresh and it got credited again on the next
+        # poll. claim_tx is an insert against a primary key, so exactly one
+        # caller can ever win, and a lost database means no credit at all
+        # rather than a repeat.
+        if not store.claim_tx(tx_id, chat_id, amount_usdt):
+            continue
+
         set_pro(chat_id, username)
-        save_processed_tx(tx_id)
+        store.cache_processed_tx(tx_id)
         remove_pending_payment(chat_id)
 
         # Notify user
@@ -392,15 +370,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get dashboard link (with auth token for Pro users)
     dash_url = "https://whaleradar.live/#dashboard"
     if user["is_pro"]:
-        try:
-            result = sb.table("subscribers").select("auth_token").eq("chat_id", update.effective_chat.id).single().execute()
-            token = result.data.get("auth_token") if result.data else None
-            if not token:
-                token = generate_auth_token()
-                sb.table("subscribers").update({"auth_token": token}).eq("chat_id", update.effective_chat.id).execute()
-            dash_url = f"https://whaleradar.live/?token={token}#dashboard"
-        except Exception:
-            pass
+        # The token rides along in the subscriber record now, so this is a
+        # cache read rather than a network call on every /start. Users upgraded
+        # before that change have no token yet, so mint one and persist it.
+        token = user.get("auth_token")
+        if not token:
+            token = generate_auth_token()
+            update_user(update.effective_chat.id, {"auth_token": token})
+        dash_url = f"https://whaleradar.live/?token={token}#dashboard"
 
     keyboard = [
         [InlineKeyboardButton("🐋 Whale Alerts", callback_data="cmd_whales")],
@@ -779,6 +756,14 @@ async def admin_upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    # Railway gives every deploy a clean disk, so the JSON cache starts empty
+    # and whatever it holds is meaningless until this runs. Pull the real state
+    # back out of Postgres before a single /start is answered, otherwise a
+    # paying customer's first message after a deploy tells them they are free.
+    store.rehydrate()
+    if not store.durable():
+        log.error("STARTING WITHOUT DURABLE STORAGE — payments will not be auto-credited")
+
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
