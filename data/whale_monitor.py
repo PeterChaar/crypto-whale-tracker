@@ -34,6 +34,20 @@ from data.whale_source import ONCHAIN_MIN_USD, PRINT_FLOOR_USD
 
 MAX_ALERTS_PER_CYCLE = 6  # a paid feed people keep reading, not a firehose
 
+# ── Public channel (the distribution engine) ─────────────────────────────────
+# The product cannot be sold by talking to strangers one at a time. A public
+# channel posts the huge on-chain moves for free, because those are already
+# public information and they are what people forward into group chats. The
+# tradeable part, exchange order flow and instant delivery, stays behind Pro.
+# Every post carries the bot link, so a forward into any crypto group is a
+# funnel that runs without anyone selling anything.
+PUBLIC_CHANNEL = os.environ.get("WR_PUBLIC_CHANNEL", "").strip()
+PUBLIC_MIN_USD = float(os.environ.get("WR_PUBLIC_MIN_USD", 10_000_000))
+MAX_PUBLIC_PER_CYCLE = 2
+BOT_START_LINK = os.environ.get(
+    "WR_BOT_LINK", "https://t.me/Whaleradarbot_bot?start=channel"
+)
+
 # Check interval in seconds
 CHECK_INTERVAL = 30  # every 30 seconds
 
@@ -183,7 +197,51 @@ def format_whale_teaser(whale: dict) -> str:
     )
 
 
-async def send_telegram_message(chat_id: int, text: str) -> bool:
+def format_public_post(whale: dict) -> str:
+    """
+    A channel post is an advert that happens to be useful.
+
+    It gives away the whole on-chain event, including the explorer link, so
+    nobody can call it bait, and then names the one thing it withheld.
+    """
+    usd = whale["amount_usd"]
+    native = whale.get("amount_native", 0)
+    unit = whale.get("unit", whale["token"])
+    chain = whale.get("chain", "").title()
+    amount = f"{_qty(native)} {unit}" if native else _money(usd)
+    heat = "\U0001F6A8\U0001F6A8" if whale.get("is_mega") else "\U0001F40B"
+
+    return (
+        f"{heat} *{_money(usd)} WHALE MOVE*\n\n"
+        f"*{amount}* just moved on {chain}\n"
+        f"\U0001F517 [See the transaction]({whale['url']})\n\n"
+        f"_Exchange order flow, who is buying and selling right now, goes to "
+        f"PRO members the second it happens._\n"
+        f"\U0001F449 [Get whale alerts]({BOT_START_LINK})"
+    )
+
+
+async def broadcast_public(whales: list[dict]):
+    """Post the biggest on-chain moves to the public channel, if configured."""
+    if not PUBLIC_CHANNEL:
+        return
+
+    posts = [
+        w for w in whales
+        if w.get("kind") == "onchain" and w["amount_usd"] >= PUBLIC_MIN_USD
+    ][:MAX_PUBLIC_PER_CYCLE]
+    if not posts:
+        return
+
+    sent = 0
+    for whale in posts:
+        if await send_telegram_message(PUBLIC_CHANNEL, format_public_post(whale)):
+            sent += 1
+        await asyncio.sleep(0.5)
+    log.info(f"Posted {sent}/{len(posts)} to public channel {PUBLIC_CHANNEL}")
+
+
+async def send_telegram_message(chat_id, text: str) -> bool:
     """
     Send one alert and report whether it truly landed.
 
@@ -287,6 +345,9 @@ async def monitor_loop():
                     + (f" (dropped {dropped} smaller)" if dropped else "")
                 )
                 await notify_pro_users(batch)
+                # Pro users are served first, then the public feed that
+                # brings the next Pro user in.
+                await broadcast_public(new_whales)
             else:
                 log.debug("No new whale transactions")
 

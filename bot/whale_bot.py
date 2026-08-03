@@ -368,6 +368,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pro(update, context)
         return
 
+    # Where this user came from, recorded once, so the channel's real
+    # contribution is measurable instead of guessed at.
+    source = context.args[0] if context.args else "direct"
+    if not user.get("source"):
+        update_user(update.effective_chat.id, {"source": source})
+
+    if source == "channel" and not user["is_pro"]:
+        await update.message.reply_text(
+            "🐋 *You came from the whale feed.*\n\n"
+            "The channel posts big on-chain moves after the block confirms. "
+            "That is the free part.\n\n"
+            "*PRO adds what the channel never posts:*\n"
+            "• Exchange order flow — who is buying and selling right now\n"
+            "• Alerts the second they happen, not after the block\n"
+            "• The asset name, size and price on every alert\n\n"
+            "Look around first, you get 3 free checks a day.",
+            parse_mode="Markdown",
+        )
+
     plan = "💎 PRO" if user["is_pro"] else "🆓 Free"
 
     # Get dashboard link (with auth token for Pro users)
